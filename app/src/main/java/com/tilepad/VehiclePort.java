@@ -13,6 +13,10 @@ interface VehiclePort {
     Reading read() throws Exception;
     /** Optional bounded telemetry. Unknown temperature never blocks a manual request. */
     default Integer readMinimumBatteryTemperatureC() { return null; }
+    /** Optional bounded telemetry for display: the whole battery reply, or null. Never blocks a request. */
+    default BatteryTemperature.Info readBatteryInfo() { return null; }
+    /** True while a battery read is still blocked in the car's service after its deadline. */
+    default boolean batteryReaderStuck() { return false; }
     default long activationTimeoutMs() { return PreconditioningController.ACTIVATION_TIMEOUT_MS; }
     default int warmThresholdC() { return BatteryTemperature.EXPECTED_HEATING_THRESHOLD_C; }
     void beginManual() throws Exception;

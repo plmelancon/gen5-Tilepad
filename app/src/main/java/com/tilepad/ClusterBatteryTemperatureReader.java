@@ -12,17 +12,25 @@ import java.util.concurrent.TimeUnit;
 final class ClusterBatteryTemperatureReader {
     private static final String SERVICE = "com.hkmc.cluster.IClusterService";
     private static final String LISTENER = "com.hkmc.cluster.INavigationClusterListener";
-    private static FutureTask<Integer> pending;
+    private static FutureTask<BatteryTemperature.Info> pending;
     private static long deadlineNanos;
 
     // Keep even a hung Binder transaction off the controller worker. At most one
     // helper is in flight across service recreation. Timeouts are never reused.
     static Integer read() {
-        final FutureTask<Integer> task;
+        BatteryTemperature.Info info = readInfo();
+        return info == null ? null : info.minimumC;
+    }
+    /** True while a helper is still blocked in the car's service after its deadline. */
+    static synchronized boolean stuck() {
+        return pending != null && !pending.isDone() && System.nanoTime() > deadlineNanos;
+    }
+    static BatteryTemperature.Info readInfo() {
+        final FutureTask<BatteryTemperature.Info> task;
         final long deadline;
         synchronized (ClusterBatteryTemperatureReader.class) {
             if (pending == null || pending.isDone()) {
-                pending = new FutureTask<Integer>(() -> collect());
+                pending = new FutureTask<BatteryTemperature.Info>(() -> collect());
                 deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(1800);
                 Thread helper = new Thread(pending, "tilepad-battery-precheck");
                 helper.setDaemon(true);
@@ -36,13 +44,13 @@ final class ClusterBatteryTemperatureReader {
         long remaining = deadline - System.nanoTime();
         if (remaining <= 0) return null;
         try {
-            Integer value = task.get(remaining, TimeUnit.NANOSECONDS);
+            BatteryTemperature.Info value = task.get(remaining, TimeUnit.NANOSECONDS);
             return System.nanoTime() <= deadline ? value : null;
         }
         catch (InterruptedException e) { Thread.currentThread().interrupt(); return null; }
         catch (Exception e) { return null; }
     }
-    private static Integer collect() throws Exception {
+    private static BatteryTemperature.Info collect() throws Exception {
         IBinder remote = (IBinder) Class.forName("android.os.ServiceManager")
             .getMethod("getService", String.class).invoke(null, "com.hkmc.micom.cluster");
         if (remote == null || !remote.isBinderAlive() || !SERVICE.equals(remote.getInterfaceDescriptor())) return null;
@@ -61,7 +69,7 @@ final class ClusterBatteryTemperatureReader {
     private static final class Listener extends Binder {
         final CountDownLatch response = new CountDownLatch(1);
         volatile boolean armed;
-        volatile Integer temperature;
+        volatile BatteryTemperature.Info temperature;
         Listener() { attachInterface(null, LISTENER); }
         @Override protected boolean onTransact(int code, Parcel data, Parcel reply, int flags) throws RemoteException {
             if (code == INTERFACE_TRANSACTION) {
@@ -72,7 +80,7 @@ final class ClusterBatteryTemperatureReader {
                 data.enforceInterface(LISTENER);
                 if (code == 16 && armed && response.getCount() != 0) {
                     int[] values = data.createIntArray();
-                    temperature = data.dataAvail() == 0 ? BatteryTemperature.decode(values) : null;
+                    temperature = data.dataAvail() == 0 ? BatteryTemperature.decodeInfo(values) : null;
                     response.countDown();
                 }
                 if (reply != null) reply.writeNoException();

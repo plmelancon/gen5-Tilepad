@@ -16,6 +16,8 @@ abstract class StatusTile extends TileView {
     final Glyph glyph;
     final SpinnerView spinner;
     final TextView pill, caption, headline, detail, meta;
+    /** Right end of the bottom line; empty unless a tile sets it. */
+    final TextView metaRight;
     private final View pillDot;
     private final LinearLayout pillBox, rows;
     private final FrameLayout content;
@@ -76,7 +78,11 @@ abstract class StatusTile extends TileView {
         addLine(rows, caption, 0);
         addLine(rows, headline, ROW_GAP);
         addLine(rows, detail, ROW_GAP);
-        addLine(rows, meta, ROW_GAP);
+        metaRight = ui.line("", 14, Ui.MUTED, false);
+        LinearLayout bottom = ui.row();
+        bottom.addView(meta, new LinearLayout.LayoutParams(0, -2, 1f));
+        bottom.addView(metaRight, new LinearLayout.LayoutParams(-2, -2));
+        addLine(rows, bottom, ROW_GAP);
         content.addView(rows, new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM));
         setContent(content);
     }
@@ -122,7 +128,7 @@ abstract class StatusTile extends TileView {
         pill.setTextSize(value ? 12 : 13);
     }
 
-    private void addLine(LinearLayout parent, TextView view, int topDp) {
+    private void addLine(LinearLayout parent, View view, int topDp) {
         LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, -2);
         p.topMargin = ui.dp(topDp);
         parent.addView(view, p);

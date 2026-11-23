@@ -197,7 +197,8 @@ final class PreconditioningController {
             requested && !(stopping && released), indicator,
             reading == null ? -1 : reading.failureRaw,
             requested ? Math.max(0, now - startedAt) : endedAt > 0 ? Math.max(0, endedAt - startedAt) : 0,
-            displayDetail, resetSeconds);
+            displayDetail, resetSeconds,
+            reading == null ? -1 : reading.ready, reading == null ? -1 : reading.enabled);
     }
     private void fail(String prefix, Exception e) {
         commandFailed = true;

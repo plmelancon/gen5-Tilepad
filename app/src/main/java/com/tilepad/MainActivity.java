@@ -97,14 +97,28 @@ public final class MainActivity extends Activity implements TileGrid.Listener, T
     private StatusCard preconCard;
     private long awaitingStartAt;
     private boolean stopIssued, startFailed, preconAutoClose;
+    private BatteryStatus battery = BatteryStatus.NONE;
+    private KeepWarm.Status keepWarm = KeepWarm.Status.OFF;
+    private String endNote = "";
+    /** The popup is asking how long to keep warm. */
+    private boolean choosingKeepWarm;
+    /** The duration shown while choosing; back to the default each time the choice opens, never remembered. */
+    private int keepWarmMinutes = KeepWarm.DEFAULT_MINUTES;
+    /** The battery monitor, while it is the sheet on screen. */
+    private MonitorCard monitorCard;
+    /** The popup and the monitor are replacing one another: the battery is still being watched. */
+    private boolean switchingSheet;
 
     private final ServiceConnection vehicleConnection = new ServiceConnection() {
         @Override public void onServiceConnected(ComponentName name, IBinder binder) {
             vehicleService = (PreconditioningService.LocalBinder) binder;
+            // The tile shows the battery too, so it is read for as long as Tilepad is on screen.
+            watchBattery(true);
             preconTick.run();
         }
         @Override public void onServiceDisconnected(ComponentName name) {
             vehicleService = null;
+            battery = BatteryStatus.NONE; keepWarm = KeepWarm.Status.OFF; endNote = "";
             onPreconditioning(PreconditioningSnapshot.checking());
         }
     };
@@ -112,7 +126,10 @@ public final class MainActivity extends Activity implements TileGrid.Listener, T
         @Override public void run() {
             main.removeCallbacks(this);
             if (!resumed) return;
-            if (vehicleService != null) onPreconditioning(vehicleService.snapshot());
+            if (vehicleService != null) {
+                battery = vehicleService.battery(); keepWarm = vehicleService.keepWarm(); endNote = vehicleService.endNote();
+                onPreconditioning(vehicleService.snapshot());
+            }
             else if (preconCard != null) renderPreconCard();
             main.postDelayed(this, 1000);
         }
@@ -277,7 +294,7 @@ public final class MainActivity extends Activity implements TileGrid.Listener, T
                 break;
             case PRECONDITION:
                 tile = preconTile = new PreconTile(ui, spec, this);
-                preconTile.bind(preconditioning);
+                preconTile.bind(preconditioning, keepWarm, battery, SystemClock.elapsedRealtime());
                 break;
             case TWEAKS:
                 tile = tweaksTile = new TweaksTile(ui, spec, this);
@@ -631,9 +648,12 @@ public final class MainActivity extends Activity implements TileGrid.Listener, T
         PreconditioningSnapshot.State previous = lastPreconState;
         preconditioning = s;
         lastPreconState = s.state;
-        if (preconTile != null) preconTile.bind(s);
+        if (preconTile != null) preconTile.bind(s, keepWarm, battery, SystemClock.elapsedRealtime());
+        if (monitorCard != null) renderMonitor();
         if (preconCard != null) renderPreconCard();
-        else if (previous == PreconditioningSnapshot.State.WAITING && s.state != previous
+        // Keep warm's own Starts never pop a card over the screen.
+        else if (previous == PreconditioningSnapshot.State.WAITING && s.state != previous && !keepWarm.armed
+            && !(vehicleService != null && vehicleService.quietSession())
             && (s.state == PreconditioningSnapshot.State.ACTIVE || s.state == PreconditioningSnapshot.State.ERROR)
             && !sheet.isShowing() && addPage == null) {
             // The BMS answered while the popup was closed: pop up the result anyway.
@@ -642,7 +662,7 @@ public final class MainActivity extends Activity implements TileGrid.Listener, T
     }
 
     private void onPreconTap() {
-        switch (PreconPresenter.tap(preconditioning)) {
+        switch (PreconPresenter.tap(preconditioning, keepWarm)) {
             case START:
                 send(PreconditioningService.START);
                 awaitingStartAt = SystemClock.uptimeMillis();
@@ -665,17 +685,22 @@ public final class MainActivity extends Activity implements TileGrid.Listener, T
         // Keep the request state across show(): it dismisses any previous sheet first.
         long awaiting = awaitingStartAt;
         boolean stopping = stopIssued;
-        sheet.show(card, 720, new Runnable() {
+        switchingSheet = monitorCard != null;
+        sheet.show(card, 900, new Runnable() {
             @Override public void run() {
                 if (preconCard != card) return;
                 preconCard = null;
                 awaitingStartAt = 0;
                 startFailed = false;
                 stopIssued = false;
+                choosingKeepWarm = false;
                 main.removeCallbacks(closePrecon);
+                sheetClosed();
             }
         });
+        switchingSheet = false;
         preconCard = card;
+        watchBattery(true);
         awaitingStartAt = awaiting;
         stopIssued = stopping;
         preconAutoClose = autoClose;
@@ -690,52 +715,87 @@ public final class MainActivity extends Activity implements TileGrid.Listener, T
         final PreconditioningSnapshot s = preconditioning;
         StatusCard card = preconCard;
         if (card == null) return;
+        boolean armed = keepWarm.armed;
         StatusCard.Action close = new StatusCard.Action("Close", Ui.SURFACE, dismiss());
-        StatusCard.Action cancel = new StatusCard.Action("Cancel request", Ui.RED, stopAction());
+        StatusCard.Action monitor = new StatusCard.Action("Battery monitor", Ui.SURFACE, new Runnable() {
+            @Override public void run() { showMonitor(); }
+        });
+        StatusCard.Action keep = new StatusCard.Action("Keep warm", Ui.SURFACE, new Runnable() {
+            @Override public void run() {
+                main.removeCallbacks(closePrecon); choosingKeepWarm = true; keepWarmMinutes = KeepWarm.DEFAULT_MINUTES; renderPreconCard();
+            }
+        });
+        StatusCard.Action cancel = new StatusCard.Action(armed ? "Stop keeping warm" : "Cancel request", Ui.RED, stopAction());
+        StatusCard.Action turnOff = new StatusCard.Action(armed ? "Stop keeping warm" : "Turn off", Ui.RED, stopAction());
+        String batteryLine = PreconPresenter.batteryLine(battery, SystemClock.elapsedRealtime());
+        String indicator = s.indicatorLabel() + (batteryLine.isEmpty() ? "" : "  ·  " + batteryLine);
         String elapsed = s.requested || s.state == PreconditioningSnapshot.State.ENDED || s.state == PreconditioningSnapshot.State.TIMED_OUT
-            ? "Elapsed " + s.elapsed() + "  ·  " + s.indicatorLabel() : s.indicatorLabel();
+            ? "Elapsed " + s.elapsed() + "  ·  " + indicator : indicator;
+        // While armed, every session text also says how long keep warm still runs.
+        String left = armed ? " " + keepWarm.timeLeft : "";
+        // After keep warm ended, the idle cards say why until it is armed again.
+        String ended = keepWarm.ended.isEmpty() ? "" : keepWarm.ended + " ";
         boolean autoClose = false;
 
         // The service answers asynchronously, so the first snapshots after a tap can be stale.
         if (awaitingStartAt > 0) {
             if (s.requested || s.state == PreconditioningSnapshot.State.ERROR
                 || s.state == PreconditioningSnapshot.State.WARM || s.state == PreconditioningSnapshot.State.TIMED_OUT) awaitingStartAt = 0;
-            else if (SystemClock.uptimeMillis() - awaitingStartAt > 5000) { awaitingStartAt = 0; startFailed = true; }
+            else if (SystemClock.uptimeMillis() - awaitingStartAt > 5000) { awaitingStartAt = 0; startFailed = !armed; }
         }
-        if (s.requested) startFailed = false;
+        if (s.requested || armed) startFailed = false;
+        if (armed || s.state == PreconditioningSnapshot.State.STOPPING || s.state == PreconditioningSnapshot.State.ERROR
+            || !(s.canStart || s.requested || s.state == PreconditioningSnapshot.State.WARM)) choosingKeepWarm = false;
         boolean stopping = stopIssued && s.requested && (s.state == PreconditioningSnapshot.State.WAITING
             || s.state == PreconditioningSnapshot.State.ACTIVE || s.state == PreconditioningSnapshot.State.UNKNOWN
             || s.state == PreconditioningSnapshot.State.STOPPING);
 
         List<View> buttons;
-        if (awaitingStartAt > 0) {
+        if (choosingKeepWarm) {
+            card.set(Glyph.Kind.BATTERY_HEAT, Ui.ACCENT, false, "Keep warm for " + KeepWarm.label(keepWarmMinutes) + "?",
+                "− and + change the time (" + KeepWarm.label(KeepWarm.MIN_MINUTES) + " to " + KeepWarm.label(KeepWarm.MAX_MINUTES)
+                    + "). Tilepad asks the car to heat now if the battery is cold and it isn't heating already, then again each time the battery has cooled, up to "
+                    + KeepWarm.mostAutomaticStarts(keepWarmMinutes) + " more " + (KeepWarm.mostAutomaticStarts(keepWarmMinutes) == 1 ? "time" : "times")
+                    + ". When the time is up it only stops asking: heating under way finishes normally. "
+                    + "The “Stop keeping warm” button turns heating off too. Uses battery charge.",
+                indicator);
+            buttons = card.setActions(new StatusCard.Action("Back", Ui.SURFACE, new Runnable() {
+                @Override public void run() { choosingKeepWarm = false; renderPreconCard(); }
+            }), keepWarmStep(-1), keepWarmStep(1), keepWarmFor(keepWarmMinutes));
+        } else if (awaitingStartAt > 0) {
             card.set(null, Ui.ACCENT, true, "Sending request…", "Asking the car to start battery conditioning.", null);
-            buttons = card.setActions(close);
+            buttons = card.setActions(close, new StatusCard.Action("Cancel", Ui.RED, stopAction()));
         } else if (startFailed) {
-            card.set(Glyph.Kind.ALERT, Ui.AMBER, false, "Not started", s.detail, s.indicatorLabel());
-            buttons = card.setActions(close);
+            card.set(Glyph.Kind.ALERT, Ui.AMBER, false, "Not started", ended + s.detail, indicator);
+            buttons = card.setActions(close, monitor);
         } else if (stopping || s.state == PreconditioningSnapshot.State.STOPPING) {
             card.set(null, Ui.MUTED, true, "Turning off",
                 s.state == PreconditioningSnapshot.State.STOPPING ? s.detail : "Releasing the manual request.", elapsed);
-            buttons = card.setActions(close);
+            buttons = card.setActions(close, monitor);
+        } else if (armed && !s.requested) {
+            // Armed on a warm battery: say that nothing was sent, as the warm notice would.
+            String warm = s.state == PreconditioningSnapshot.State.WARM ? "The battery is already warm, so no request was sent. " : "";
+            card.set(Glyph.Kind.BATTERY_HEAT, Ui.GREEN, false, "Keeping warm", warm + keepWarm.waiting + " " + keepWarm.timeLeft, indicator);
+            buttons = card.setActions(close, monitor, new StatusCard.Action("Stop keeping warm", Ui.RED, stopAction()));
         } else switch (s.state) {
             case CHECKING:
                 card.set(null, Ui.MUTED, true, "Checking vehicle", s.detail, null);
                 buttons = card.setActions(close);
                 break;
             case WAITING:
-                card.set(Glyph.Kind.BATTERY_HEAT, Ui.AMBER, true, "Waiting for BMS",
-                    PreconPresenter.withoutPrefix(s.detail, "Waiting for BMS — "), elapsed);
-                buttons = card.setActions(close, cancel);
+                card.set(Glyph.Kind.BATTERY_HEAT, Ui.AMBER, true, armed ? "Keeping warm · waiting for BMS" : "Waiting for BMS",
+                    ended + PreconPresenter.withoutPrefix(s.detail, "Waiting for BMS — ") + left, elapsed);
+                buttons = armed ? card.setActions(close, monitor, cancel) : card.setActions(close, monitor, keep, cancel);
                 break;
             case ACTIVE:
-                card.set(Glyph.Kind.CHECK, Ui.GREEN, false, "Preconditioning active", s.detail, elapsed);
-                buttons = card.setActions(close, new StatusCard.Action("Turn off", Ui.RED, stopAction()));
-                autoClose = preconAutoClose;
+                card.set(Glyph.Kind.CHECK, Ui.GREEN, false, armed ? "Keeping warm · heating" : "Preconditioning active", ended + s.detail + left, elapsed);
+                buttons = armed ? card.setActions(close, monitor, turnOff) : card.setActions(close, monitor, keep, turnOff);
+                // A card that also says why keep warm ended stays until the driver closes it.
+                autoClose = preconAutoClose && keepWarm.ended.isEmpty();
                 break;
             case WARM:
-                card.set(Glyph.Kind.ALERT, Ui.AMBER, false, "Battery warm", s.detail, s.indicatorLabel());
-                buttons = card.setActions(close, new StatusCard.Action("Start anyway", Ui.ACCENT, new Runnable() {
+                card.set(Glyph.Kind.ALERT, Ui.AMBER, false, "Battery warm", ended + s.detail, indicator);
+                buttons = card.setActions(close, monitor, keep, new StatusCard.Action("Start anyway", Ui.ACCENT, new Runnable() {
                     @Override public void run() {
                         main.removeCallbacks(closePrecon);
                         send(PreconditioningService.START_ANYWAY);
@@ -745,38 +805,39 @@ public final class MainActivity extends Activity implements TileGrid.Listener, T
                 }));
                 break;
             case TIMED_OUT:
-                card.set(Glyph.Kind.ALERT, Ui.AMBER, false, "No activation", s.detail, s.indicatorLabel());
-                buttons = s.canStart ? card.setActions(close, startAction()) : card.setActions(close);
+                card.set(Glyph.Kind.ALERT, Ui.AMBER, false, "No activation", ended + s.detail, indicator);
+                buttons = s.canStart ? card.setActions(close, monitor, keep, startAction()) : card.setActions(close, monitor);
                 break;
             case UNAVAILABLE:
-                card.set(Glyph.Kind.ALERT, Ui.AMBER, false, "Unavailable", s.detail, s.indicatorLabel());
-                buttons = card.setActions(close);
+                card.set(Glyph.Kind.ALERT, Ui.AMBER, false, "Unavailable", ended + s.detail, indicator);
+                buttons = card.setActions(close, monitor);
                 break;
             case UNKNOWN:
-                card.set(Glyph.Kind.ALERT, Ui.AMBER, false, "Status unknown", s.detail, elapsed);
-                buttons = s.canStop ? card.setActions(close, cancel) : card.setActions(close);
+                card.set(Glyph.Kind.ALERT, Ui.AMBER, false, "Status unknown", ended + s.detail + left, elapsed);
+                buttons = s.canStop ? card.setActions(close, monitor, cancel) : card.setActions(close, monitor);
                 break;
             case ERROR:
-                card.set(Glyph.Kind.ALERT, Ui.RED, false, s.title(), s.detail, elapsed);
-                buttons = s.canStop ? card.setActions(close, new StatusCard.Action("Stop request", Ui.RED, stopAction()))
-                    : s.canStart ? card.setActions(close, startAction()) : card.setActions(close);
+                card.set(Glyph.Kind.ALERT, Ui.RED, false, s.title(), ended + s.detail, elapsed);
+                buttons = s.canStop ? card.setActions(close, monitor, new StatusCard.Action("Stop request", Ui.RED, stopAction()))
+                    : s.canStart ? card.setActions(close, monitor, startAction()) : card.setActions(close, monitor);
                 break;
             default: // IDLE, ENDED
                 if (s.indicator == 1) {
                     card.set(Glyph.Kind.BATTERY_HEAT, Ui.GREEN, false, "Conditioning by the car",
                         "The car is conditioning the battery on its own, for example ahead of a navigation charging stop. "
-                            + "Tilepad didn't start it, so it doesn't stop it.", s.indicatorLabel());
-                    buttons = card.setActions(close);
+                            + "Tilepad didn't start it, so it doesn't stop it.", indicator);
+                    buttons = card.setActions(close, monitor);
                 } else if (stopIssued || s.state == PreconditioningSnapshot.State.ENDED) {
-                    card.set(Glyph.Kind.CHECK, Ui.MUTED, false, "Preconditioning off", s.detail, elapsed);
-                    buttons = s.canStart ? card.setActions(close, startAction()) : card.setActions(close);
+                    card.set(Glyph.Kind.CHECK, Ui.MUTED, false, "Preconditioning off",
+                        ended + (endNote.isEmpty() || !ended.isEmpty() ? s.detail : endNote), elapsed);
+                    buttons = s.canStart ? card.setActions(close, monitor, keep, startAction()) : card.setActions(close, monitor);
                     autoClose = preconAutoClose && stopIssued;
                 } else if (s.canStart) {
-                    card.set(Glyph.Kind.BATTERY_HEAT, Ui.ACCENT, false, "Ready", s.detail, s.indicatorLabel());
-                    buttons = card.setActions(close, startAction());
+                    card.set(Glyph.Kind.BATTERY_HEAT, Ui.ACCENT, false, "Ready", ended + s.detail, indicator);
+                    buttons = card.setActions(close, monitor, keep, startAction());
                 } else {
-                    card.set(Glyph.Kind.ALERT, Ui.AMBER, false, "Can't start right now", s.detail, s.indicatorLabel());
-                    buttons = card.setActions(close);
+                    card.set(Glyph.Kind.ALERT, Ui.AMBER, false, "Can't start right now", ended + s.detail, indicator);
+                    buttons = card.setActions(close, monitor);
                 }
         }
         if (!buttons.equals(sheet.targets())) sheet.setTargets(buttons);
@@ -784,6 +845,80 @@ public final class MainActivity extends Activity implements TileGrid.Listener, T
             preconAutoClose = false; // only once per popup
             main.postDelayed(closePrecon, 3000);
         }
+    }
+
+    /** − or +: changes the shown duration by one step. Nothing is sent. */
+    private StatusCard.Action keepWarmStep(final int direction) {
+        return new StatusCard.Action(direction < 0 ? "−" : "+", Ui.SURFACE, new Runnable() { @Override public void run() {
+            main.removeCallbacks(closePrecon);
+            keepWarmMinutes = KeepWarm.step(keepWarmMinutes, direction);
+            renderPreconCard();
+        } });
+    }
+
+    /** Arms for the shown duration. Arming also sends a Start when the car can take one. */
+    private StatusCard.Action keepWarmFor(final int minutes) {
+        // The label never changes with the duration: the card keeps its buttons, so the knob keeps its place.
+        return new StatusCard.Action("Start keep warm", Ui.ACCENT, new Runnable() { @Override public void run() {
+            main.removeCallbacks(closePrecon);
+            startService(new Intent(MainActivity.this, PreconditioningService.class)
+                .setAction(PreconditioningService.KEEP_WARM).putExtra(PreconditioningService.MINUTES, minutes));
+            choosingKeepWarm = false;
+            if (preconditioning.canStart) awaitingStartAt = SystemClock.uptimeMillis();
+            startFailed = false; stopIssued = false; preconAutoClose = false;
+            renderPreconCard();
+        } });
+    }
+
+    /**
+     * The popup or the monitor went away. Unless the other is taking its place, the reason keep
+     * warm ended has been seen and isn't repeated. The battery stays watched for the tile.
+     */
+    private void sheetClosed() {
+        if (switchingSheet) return;
+        if (vehicleService != null && !keepWarm.ended.isEmpty()) vehicleService.acknowledgeKeepWarmEnded();
+    }
+
+    private void watchBattery(boolean on) {
+        if (vehicleService != null) vehicleService.watch(on);
+    }
+
+    // ---- battery monitor ----
+
+    private void showMonitor() {
+        final MonitorCard card = new MonitorCard(ui);
+        main.removeCallbacks(closePrecon);
+        switchingSheet = preconCard != null;
+        sheet.show(card, 1120, new Runnable() {
+            @Override public void run() {
+                if (monitorCard != card) return;
+                monitorCard = null;
+                sheetClosed();
+            }
+        });
+        switchingSheet = false;
+        monitorCard = card;
+        watchBattery(true);
+        renderMonitor();
+    }
+
+    private void renderMonitor() {
+        MonitorCard card = monitorCard;
+        if (card == null) return;
+        List<TemperatureLog.Point> points = vehicleService == null
+            ? java.util.Collections.<TemperatureLog.Point>emptyList() : vehicleService.history();
+        List<String> events = vehicleService == null ? java.util.Collections.<String>emptyList() : vehicleService.events();
+        card.set(preconditioning, battery, keepWarm, endNote, points, events, SystemClock.elapsedRealtime());
+        StatusCard.Action close = new StatusCard.Action("Close", Ui.SURFACE, dismiss());
+        StatusCard.Action back = new StatusCard.Action("Preconditioning", Ui.SURFACE, new Runnable() {
+            @Override public void run() { showPreconCard(false); }
+        });
+        List<View> buttons = preconditioning.requested || keepWarm.armed
+            ? card.setActions(close, back, new StatusCard.Action(keepWarm.armed ? "Stop keeping warm" : "Turn off", Ui.RED, new Runnable() {
+                @Override public void run() { send(PreconditioningService.STOP); }
+            }))
+            : card.setActions(close, back);
+        if (!buttons.equals(sheet.targets())) sheet.setTargets(buttons);
     }
 
     private Runnable stopAction() {

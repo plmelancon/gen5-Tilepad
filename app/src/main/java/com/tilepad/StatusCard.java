@@ -46,7 +46,7 @@ final class StatusCard extends LinearLayout {
         LinearLayout text = ui.column();
         title = ui.text("", 26, Ui.TEXT, true);
         body = ui.text("", 18, Ui.MUTED, false);
-        body.setMaxLines(4);
+        body.setMaxLines(6);
         body.setLineSpacing(0, 1.15f);
         meta = ui.text("", 16, Ui.MUTED, false);
         text.addView(title);

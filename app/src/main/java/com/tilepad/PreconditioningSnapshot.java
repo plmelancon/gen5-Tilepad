@@ -8,6 +8,8 @@ final class PreconditioningSnapshot {
     final State state;
     final boolean requested, canStart, canStop;
     final int indicator, failureRaw;
+    /** The car's raw READY and conditioning-setting values, -1 when unread. Shown as read, and what keep warm stands down on. */
+    final int readyRaw, enabledRaw;
     final long elapsedMs, warmRemainingSeconds;
     final String detail;
     PreconditioningSnapshot(State state, boolean requested, boolean canStart, boolean canStop,
@@ -16,6 +18,12 @@ final class PreconditioningSnapshot {
     }
     PreconditioningSnapshot(State state, boolean requested, boolean canStart, boolean canStop,
                             int indicator, int failureRaw, long elapsedMs, String detail, long warmRemainingSeconds) {
+        this(state, requested, canStart, canStop, indicator, failureRaw, elapsedMs, detail, warmRemainingSeconds, -1, -1);
+    }
+    PreconditioningSnapshot(State state, boolean requested, boolean canStart, boolean canStop,
+                            int indicator, int failureRaw, long elapsedMs, String detail, long warmRemainingSeconds,
+                            int readyRaw, int enabledRaw) {
+        this.readyRaw = readyRaw; this.enabledRaw = enabledRaw;
         this.warmRemainingSeconds = warmRemainingSeconds;
         this.state = state; this.requested = requested; this.canStart = canStart;
         this.canStop = canStop; this.indicator = indicator; this.failureRaw = failureRaw;

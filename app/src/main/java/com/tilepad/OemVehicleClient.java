@@ -53,6 +53,12 @@ final class OemVehicleClient implements VehiclePort, PreconditioningProfile.Comm
         if (!firmwareChecked) return null;
         return ClusterBatteryTemperatureReader.read();
     }
+    @Override public BatteryTemperature.Info readBatteryInfo() {
+        // Same gate as the minimum: nothing is asked of the cluster before the hashes pass.
+        if (!firmwareChecked) return null;
+        return ClusterBatteryTemperatureReader.readInfo();
+    }
+    @Override public boolean batteryReaderStuck() { return ClusterBatteryTemperatureReader.stuck(); }
     @Override public Reading read() throws Exception {
         connect(true);
         int enabled = getter(hev, HEV, 3, 94);
