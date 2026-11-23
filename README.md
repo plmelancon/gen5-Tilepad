@@ -21,8 +21,8 @@ is the one set to HOME); the same goes for its action.
 
 - **Wi-Fi status**, on head units that have a Wi-Fi module. The tile shows the network, the IP
   address and the signal strength. Tap it to turn Wi-Fi on or off and to pick a network.
-- **Manual battery preconditioning**, on cars that support it. One tap starts it and one tap stops
-  it.
+- **Manual battery preconditioning**, on cars that support it, with a battery temperature monitor
+  and an optional **Keep warm** that asks the car to heat again each time the battery has cooled.
 - **Bundled Tweaks app**, opened from the permanent **Tweaks and Settings** tile beside
   **Precondition**. It has eleven tweaks, and they all start off:
   - **Automatic Daylight Saving Time** keeps the head unit's daylight saving switch in step with
@@ -65,23 +65,38 @@ send commands.
 | Tile | Shows | Tap |
 | --- | --- | --- |
 | **Wi-Fi** *(only on units with a Wi-Fi module)* | Signal bars, the status (Connected, No network or Off), the network name, the IP address and the link speed. | Opens Android's Wi-Fi settings, where you turn Wi-Fi on or off and pick a network (see below). A long press shows the Wi-Fi MAC address, which you need to reserve a static IP on your router. |
-| **Precondition** *(EVs only)* | The state (Off, Waiting, Active, Unavailable and so on), a spinner while waiting, and the elapsed time. A *Conditioning* pill (a small rounded label) appears while the car's own indicator is on. | See below. |
+| **Precondition** *(EVs only)* | The state (Off, Waiting, Active, Keeping warm, Unavailable and so on), a spinner while waiting, and, once the battery has been read, its temperature in large figures over a bar that fills from the starting temperature to the target during a session, with a label at each end. The target is the temperature where this car is expected to stop heating. A *Conditioning* pill (a small rounded label) appears while the car's own indicator is on. | Opens the preconditioning popup. See below. |
 | **Tweaks and Settings** | An On/Off pill, which is on when any tweak is enabled, and a count of the tweaks that are on and off. | Opens the bundled `Tweaks.apk`. Each tweak has a checkbox and a detailed explanation, and Support and Package Manager come after the tweaks. |
 | **ADB** | An On/Off pill, with the port number while ADB is on and *Port closed* while it is off. | Asks you to confirm, then turns ADB over Wi-Fi on or off (see below). |
 | **Nemesis Manager** | | Opens NEMESIS Manager. The tile is dimmed if NEMESIS Manager isn't installed. |
 | **Reboot Head Unit** | | Asks you to confirm, then restarts the head unit by running `nemesis root -c reboot`. |
 | **Add shortcut** | | Opens a searchable list of every screen on the head unit, including Hyundai and system screens that have no icon. |
 
-**Preconditioning with one button.** What a tap does depends on the tile's state:
-- When it is Off, a tap sends Start and opens a progress popup. The popup shows *Waiting for BMS*,
-  which usually takes 60 to 120 seconds, and changes to ✓ *Preconditioning active* once the car
-  reports that preconditioning is on. If you closed the popup before then, it opens again on its
-  own.
-- When it is Waiting, a tap reopens the popup, which has a **Cancel request** button. A stray tap
-  won't cancel the request.
-- When it is Active, a tap turns preconditioning off. The popup shows *Turning off*, then *Off*.
-- In any other state (Unavailable, Error, the car not reporting READY, and so on), a tap opens a
-  popup with the car's reason.
+**Preconditioning.** A tap on the tile opens the popup and sends nothing to the car, so you can
+look at the battery without starting anything:
+- **Start** sends one request. The popup shows *Waiting for BMS*, which usually takes 60 to 120
+  seconds, and changes to ✓ *Preconditioning active* once the car reports that preconditioning is
+  on. If you closed the popup before then, it opens again on its own. **Cancel request** and
+  **Turn off** end it.
+- **Battery monitor** shows the battery's lowest temperature, read from the car every 10 seconds
+  while Tilepad is on screen, with a graph, what the session is doing, the car's raw values and the last
+  things Tilepad sent or saw. The graph covers the time Tilepad has been on screen or Keep warm has
+  been running; it starts empty each time.
+- **Keep warm** asks how long with **−** and **+** (15 minutes to 2 hours in 15-minute steps, then
+  up to 6 hours in 30-minute steps; it opens at 1 hour each time), then repeats ordinary requests:
+  when the car has stopped heating and the battery has stayed 2°C or more under the car's expected
+  threshold for 3 minutes, Tilepad asks again, at most every 8 minutes and at most 4 times after
+  the first request (2 per hour above 2 hours, so 12 at 6 hours). Between requests Tilepad holds
+  nothing in the car. It ends when the time is up, when the limit is reached, when the car is no
+  longer ready, when the battery can't be read, or when the car twice doesn't heat. **When it ends
+  on its own it only stops asking: nothing is sent to the car, and heating already under way
+  finishes normally.** A notification says why. **Stop keeping warm** ends it and turns heating
+  off too. The Battery monitor shows the time left and the count of automatic requests. It is
+  never remembered: closing and reopening Tilepad or restarting the head unit never starts it
+  again. It uses battery charge.
+- In any other state (Unavailable, Error, the car not reporting READY, and so on), the popup gives
+  the reason. The monitor adds *Tilepad's reading*: what Tilepad can see that explains why the car
+  isn't heating. The car itself gives no reason, and Tilepad doesn't invent one.
 
 The tile only shows Active when the car's own indicator says so, never just because enough time
 has passed. The request keeps going after you close Tilepad.

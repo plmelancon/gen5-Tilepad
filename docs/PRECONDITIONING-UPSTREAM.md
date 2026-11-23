@@ -119,10 +119,49 @@ subscription. No service, receiver, boot action, alarm or permission was added.
 The root star-hold service still only opens Tilepad; moving preconditioning into
 that process would couple vehicle ownership to the launcher trigger unnecessarily.
 
-Not imported: scheduled/automatic Start, the redesigned upstream app and tabs,
-installer changes, TUNE remapping, graphs, temperature history, continuous
-telemetry polling, or the scheduler's unverified outside-temperature scaling.
-The only popup additions are warm consent and confirmed activation-timeout text.
+Not imported: scheduled Start, the redesigned upstream app and tabs, installer
+changes, TUNE remapping, or the scheduler's unverified outside-temperature scaling.
+Upstream's graph and temperature history were not imported either; Tilepad has its
+own (below).
+
+## Tilepad's own additions
+
+Written for Tilepad, not taken from upstream. No command sequence, transaction code or
+controller decision changed, and every earlier test passes unmodified.
+
+- **Whole battery reply.** `ClusterBatteryTemperatureReader.readInfo()` returns the eight-integer
+  reply as `BatteryTemperature.Info` (minimum, and raw charge, outside sensor and conditioning
+  status). The same three cluster transactions, 37/109/38. `stuck()` reports a helper still
+  blocked after its deadline. `VehiclePort.readBatteryInfo()` is behind the firmware gate.
+- **Battery monitor.** A second thread in the service reads the battery every 10 seconds while
+  Tilepad is on screen (the tile shows it), every 20 seconds while Keep warm is armed, and never
+  otherwise. Five failed reads in a row stop it. The Start pre-check uses a reading younger than
+  10 seconds, else its own read. `TemperatureLog` keeps 360 readings in memory.
+- **Raw values and Tilepad's reading.** The snapshot carries the raw READY and setting values. The
+  monitor shows the raw values as read, including status id 115, whose meaning isn't established,
+  and one sentence labelled as Tilepad's reading. `EventTrail` keeps the last 50 events and writes
+  each to logcat under `tilepad-precon`, which the support log keeps.
+- **Keep warm.** `KeepWarm` repeats ordinary one-off sessions for 15 minutes to 6 hours (15-minute
+  steps to 2 hours, then 30-minute steps). It is
+  armed only from the popup, lives in memory only, and holds no request between sessions. An
+  automatic Start goes through the same path as the button and needs, on the same tick: nothing
+  requested, READY, the setting on, the indicator off, no warm notice, fewer automatic Starts than
+  the limit (max(4, minutes / 30)), 8 minutes since the last Start, 5 minutes since the last session ended, and 3 minutes of
+  readings at least 2°C under the threshold with no gap over 45 seconds. It disarms on a gap of
+  more than 10 seconds between ticks, when the time is up, on an error, when the car's own values
+  say it is not ready or the setting is off, after a minute of unknown status, after 5 minutes
+  without a reading, and after two sessions in a row that never became Active. Disarming by itself
+  sends nothing to the car: a session already running, Keep warm's own included, ends by the
+  ordinary rules, and a plain notification says why Keep warm ended (not when the car was simply
+  switched off). Only the driver's Stop cancels. A Stop that arrives
+  while a Start is being prepared prevents that Start. The spacing idea follows the Continuous mode of the
+  WiCAN preconditioning firmware (GPL-3.0); nothing is held between sessions here.
+- **Tile.** A tap opens the popup and never sends anything by itself. During a session the tile
+  shows the battery's start, current and target temperatures; the target is the profile's
+  expected heating threshold, not a value read from the car.
+- **Emulator.** The debug build's simulated car is scriptable: `tools/preconditioning/SIMULATOR.md`.
+
+Not verified on a car: everything in this section. It has host tests and emulator runs only.
 
 ## Verification
 

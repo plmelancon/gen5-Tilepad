@@ -59,8 +59,13 @@ Preconditioning supports ten exact upstream firmware profiles, plus one of Tilep
 and Korean IONIQ 5 and EV6 units and the US IONIQ 6. On other firmware it can't start
 preconditioning or send commands: the
 Android version, device, software identity and both OEM framework hashes must match a supported
-profile. The backend is Launchpad's, unchanged: firmware-hash gate, ownership journal,
-cancel-on-recovery, and a foreground service that keeps the request alive after the app closes.
+profile. The backend is Launchpad's: firmware-hash gate, ownership journal, cancel-on-recovery, and
+a foreground service that keeps the request alive after the app closes. Its command sequences and
+the controller's decisions are unchanged. Tilepad adds, around it: the whole battery reply
+(`BatteryTemperature.Info`), a reader thread in the service for the monitor (`TemperatureLog`,
+`BatteryStatus`, `MonitorCard`, `TemperatureChart`), an event trail that also goes to logcat
+(`EventTrail`), and Keep warm (`KeepWarm`), which only decides when the service may send another
+ordinary Start.
 "Active" only ever comes from the car's own indicator, never from a timer. Compatibility and safety
 notes are in Launchpad's
 [COMPATIBILITY.md](https://github.com/paytondevs/gen5w-preconditioning/blob/main/COMPATIBILITY.md);
